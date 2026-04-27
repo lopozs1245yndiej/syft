@@ -1,46 +1,105 @@
-OWNER = anchore
-PROJECT = syft
+# Makefile for syft - a fork of anchore/syft
 
-TOOL_DIR = .tool
-BINNY = $(TOOL_DIR)/binny
-TASK = $(TOOL_DIR)/task
+# Variables
+BINARY := syft
+GO := go
+GOFLAGS ?= -trimpath
+GOBUILD := $(GO) build $(GOFLAGS)
+GOTEST := $(GO) test
+GOVET := $(GO) vet
+GOFMT := gofmt
+GOLINT := golangci-lint
 
-.DEFAULT_GOAL := make-default
+# Version information
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "v0.0.0-dev")
+GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILD_DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-## Bootstrapping targets #################################
+# Build flags
+LD_FLAGS := -ldflags "-X main.version=$(VERSION) -X main.gitCommit=$(GIT_COMMIT) -X main.buildDate=$(BUILD_DATE) -w -s"
 
-# note: we need to assume that binny and task have not already been installed
-$(BINNY):
-	@mkdir -p $(TOOL_DIR)
-	@curl -sSfL https://get.anchore.io/binny | sh -s -- -b $(TOOL_DIR)
+# Directories
+CMD_DIR := ./cmd/syft
+DIST_DIR := ./dist
+SNAPSHOT_DIR := ./snapshot
 
-# note: we need to assume that binny and task have not already been installed
-.PHONY: task
-$(TASK) task: $(BINNY)
-	@$(BINNY) install task -q
+# Tool versions (managed by binny)
+TOOL_DIR := ./.tool
 
-.PHONY: ci-bootstrap-go
-ci-bootstrap-go:
-	go mod download
+.DEFAULT_GOAL := help
 
-# this is a bootstrapping catch-all, where if the target doesn't exist, we'll ensure the tools are installed and then try again
-%:
-	@make --silent $(TASK)
-	@$(TASK) $@
+.PHONY: help
+help: ## Show this help message
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
-## Shim targets #################################
+.PHONY: all
+all: clean build test ## Run clean, build, and test
 
-.PHONY: make-default
-make-default: $(TASK)
-	@# run the default task in the taskfile
-	@$(TASK)
+.PHONY: build
+build: ## Build the syft binary
+	$(GOBUILD) $(LD_FLAGS) -o $(BINARY) $(CMD_DIR)
 
-# for those of us that can't seem to kick the habit of typing `make ...` lets wrap the superior `task` tool
-TASKS := $(shell bash -c "test -f $(TASK) && NO_COLOR=1 $(TASK) -l | grep '^\* ' | cut -d' ' -f2 | tr -d ':' | tr '\n' ' '" ) $(shell bash -c "test -f $(TASK) && NO_COLOR=1 $(TASK) -l | grep 'aliases:' | cut -d ':' -f 3 | tr '\n' ' ' | tr -d ','")
+.PHONY: snapshot
+snapshot: ## Build a snapshot release using goreleaser
+	goreleaser release --snapshot --clean --skip=publish
 
-.PHONY: $(TASKS)
-$(TASKS): $(TASK)
-	@$(TASK) $@
+.PHONY: test
+test: ## Run unit tests
+	$(GOTEST) -race -coverprofile=coverage.out ./...
 
-help: $(TASK)
-	@$(TASK) -l
+.PHONY: test-integration
+test-integration: ## Run integration tests
+	$(GOTEST) -tags integration -race ./...
+
+.PHONY: coverage
+coverage: test ## Generate and display test coverage report
+	$(GO) tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report generated at coverage.html"
+
+.PHONY: lint
+lint: ## Run linters
+	$(GOLINT) run ./...
+
+.PHONY: fmt
+fmt: ## Format Go source files
+	$(GOFMT) -w -s .
+
+.PHONY: fmt-check
+fmt-check: ## Check Go source file formatting
+	@if [ -n "$(shell $(GOFMT) -l .)" ]; then \
+		echo "The following files are not formatted:"; \
+		$(GOFMT) -l .; \
+		exit 1; \
+	fi
+
+.PHONY: vet
+vet: ## Run go vet
+	$(GOVET) ./...
+
+.PHONY: tidy
+tidy: ## Tidy go modules
+	$(GO) mod tidy
+
+.PHONY: clean
+clean: ## Remove build artifacts
+	rm -f $(BINARY)
+	rm -f coverage.out coverage.html
+	rm -rf $(DIST_DIR) $(SNAPSHOT_DIR)
+
+.PHONY: install
+install: build ## Install the syft binary to GOPATH/bin
+	$(GO) install $(LD_FLAGS) $(CMD_DIR)
+
+.PHONY: bootstrap
+bootstrap: ## Install project tooling dependencies
+	$(GO) install github.com/anchore/binny@latest
+	binny install
+
+.PHONY: check
+check: fmt-check vet lint test ## Run all checks (format, vet, lint, test)
+
+.PHONY: version
+version: ## Print version information
+	@echo "Version:    $(VERSION)"
+	@echo "Git Commit: $(GIT_COMMIT)"
+	@echo "Build Date: $(BUILD_DATE)"
