@@ -95,6 +95,8 @@ bootstrap: ## Install project tooling dependencies
 	$(GO) install github.com/anchore/binny@latest
 	binny install
 
+# Note: 'check' intentionally excludes integration tests for faster local feedback.
+# Run 'make test-integration' separately when needed.
 .PHONY: check
 check: fmt-check vet lint test ## Run all checks (format, vet, lint, test)
 
