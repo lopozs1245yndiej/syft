@@ -51,8 +51,10 @@ test: ## Run unit tests
 test-integration: ## Run integration tests
 	$(GOTEST) -tags integration -race ./...
 
+# Use -count=1 to disable test result caching, ensuring fresh coverage data each run.
 .PHONY: coverage
-coverage: test ## Generate and display test coverage report
+coverage: ## Generate and display test coverage report
+	$(GOTEST) -race -count=1 -coverprofile=coverage.out ./...
 	$(GO) tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report generated at coverage.html"
 
